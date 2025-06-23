@@ -41,5 +41,3 @@ pip install -r requirements.txt
 #Run the app
 python main.py
 
-#Install requirements
-pip install -r requirements.txt
