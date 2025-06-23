@@ -1,0 +1,11 @@
+customtkinter
+Pillow
+requests
+beautifulsoup4
+python-dotenv
+langchain>=0.2.0
+langchain-community
+chromadb
+tiktoken
+openai
+huggingface_hub
