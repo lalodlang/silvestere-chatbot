@@ -2,30 +2,30 @@
 
 A desktop-based intelligent assistant for Silvestre PH products, built with Python, CustomTkinter, LangChain, and RAG (Retrieval-Augmented Generation) architecture.
 
-## ✨ Features
+#Features
 
-- 💬 Real-time product Q&A from (SilvestrePH) "https://www.silvestreph.com/"
-- 🔎 Knowledge base scraping from sitemap + live pages
-- 🧠 Memory and follow-up understanding
-- 🌐 Clickable URLs in chat
-- ♻️ Manual knowledge base refresh with spinner overlay
-- 🖼️ CustomTkinter-based modern chat UI
+- Real-time product Q&A from (SilvestrePH) "https://www.silvestreph.com/"
+- Knowledge base scraping from sitemap + live pages
+- Memory and follow-up understanding
+- Clickable URLs in chat
+- Manual knowledge base refresh with spinner overlay
+- CustomTkinter-based modern chat UI
 
 ---
 
-## 📁 Project Structure
+Project Structure
 silvestere-chatbot/
 │
-├── assets/ # UI images like loading, spinner
-├── db.py # Scraper + SQLite data loader
-├── main.py # Main app launcher
-├── ui.py # CustomTkinter UI layout and logic
-├── rag_chain.py # LangChain RAG setup and bot response
-├── refresh_and_rebuild.py # Utility to refresh the knowledge base
-├── sitemap.xml # Sitemap for product discovery
-├── requirements.txt # Python dependencies
-├── .env # API keys (not pushed to GitHub)
-└── README.md # You're here
+├── assets/ 
+├── db.py 
+├── main.py
+├── ui.py 
+├── rag_chain.py 
+├── refresh_and_rebuild.py 
+├── sitemap.xml 
+├── requirements.txt 
+├── .env 
+└── README.md 
 
 ```bash
 git clone https://github.com/lalodlang/silvestere-chatbot.git
