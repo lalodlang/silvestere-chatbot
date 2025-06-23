@@ -1,0 +1,9 @@
+__pycache__/ 
+*.pyc 
+*.spec 
+.env 
+chatbot-env/ 
+chroma_db/ 
+silvestre_products.db 
+build/ 
+dist/ 
