@@ -3,6 +3,7 @@ langchain
 langchain-community
 langchain-core
 langchain-groq
+langchain-cohere
 chromadb
 huggingface_hub
 beautifulsoup4
