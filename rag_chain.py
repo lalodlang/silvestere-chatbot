@@ -9,17 +9,18 @@ from langchain_core.documents import Document
 from fuzzywuzzy import fuzz
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import (
-    RunnableParallel,
-    RunnablePassthrough,
-    RunnableLambda
-)
 from langchain_groq import ChatGroq
 from langchain_cohere import CohereEmbeddings
 from langchain_community.vectorstores import Chroma
 from vectorstore_utils import load_vectorstore
 from intent_utils import detect_intent, is_followup_question
 from db import get_all_product_names, GENERAL_PAGES
+from intent_utils import is_followup_question, update_followup_state
+from langchain_core.runnables import (
+    RunnableParallel,
+    RunnablePassthrough,
+    RunnableLambda
+)
 
 # Load environment
 load_dotenv()
@@ -41,7 +42,11 @@ vectorstore = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding
 retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
 # LLM
-llm = ChatGroq(groq_api_key=GROQ_API_KEY, model=GROQ_MODEL)
+llm = ChatGroq(
+    groq_api_key=GROQ_API_KEY,
+    model=GROQ_MODEL,
+    temperature=0.2
+)
 
 # PROMPTS
 PRODUCT_PROMPT = PromptTemplate.from_template("""
@@ -81,6 +86,25 @@ User: {question}
 Reply in a clear, customer-friendly way.
 """)
 
+FOLLOWUP_PROMPT = PromptTemplate.from_template("""
+You are a helpful assistant for Silvestre Oil Company.
+
+The customer is asking a **follow-up question** about this product:
+
+<context>
+{context}
+</context>
+
+<chat_history>
+{history}
+</chat_history>
+
+User: {question}
+
+Respond concisely and specifically to the follow-up question (e.g., just pricing, availability, packaging, etc.), without repeating full product info.
+""")
+  
+
 # RAG CHAINS
 rag_chain_product = (
     RunnableParallel(
@@ -96,6 +120,14 @@ rag_chain_general = (
         question=RunnablePassthrough(),
         history=RunnableLambda(lambda x: x.get("history", ""))
     ) | GENERAL_PROMPT | llm | StrOutputParser()
+)
+
+rag_chain_followup = (
+    RunnableParallel(
+        context=RunnableLambda(lambda x: x["context"]),
+        question=RunnablePassthrough(),
+        history=RunnableLambda(lambda x: x.get("history", ""))
+    ) | FOLLOWUP_PROMPT | llm | StrOutputParser()
 )
 
 
@@ -115,30 +147,33 @@ def ask_bot(query: str, history: list[dict]) -> str:
     matched_from_semantic = False
 
     intent = detect_intent(query)
+    if is_followup_question(query):
+        intent = "product"
+        
     formatted_history = "\n".join(f"{msg['role'].capitalize()}: {msg['content']}" for msg in history[-3:])
 
-    # Reset memory when switching away from product intent
-    if intent == "general" and last_product_doc:
-        print("[INFO] Switching from product → general. Resetting memory.")
+    # Reset memory if switching away from product
+    if intent != "product" and last_product_doc:
+        print("[INFO] Switching away from product intent. Resetting memory.")
         last_product_doc = None
 
-    # Shortcut: list products
+    # Shortcut: List products
     if any(keyword in query.lower() for keyword in [
         "what are your products", "list your products",
         "show me your products", "can i see your products",
         "what products do you have"]):
-
         return get_all_products()
 
     # --------------------- PRODUCT INTENT ---------------------
     if intent == "product":
-        if is_followup_question(query):
+        is_followup = is_followup_question(query) or update_followup_state(intent)
+        if is_followup:
             if not last_product_doc:
                 return "Please mention a specific product so I can assist you better."
             matched = last_product_doc
             print(f"[FOLLOW-UP] Reusing last product: {matched.metadata.get('name')}")
         else:
-            # Step 1: Semantic match using retriever + token_set_ratio
+            # Step 1: Retriever-based match
             docs = retriever.get_relevant_documents(query)
             best_doc = None
             best_score = 0
@@ -158,7 +193,7 @@ def ask_bot(query: str, history: list[dict]) -> str:
                 matched_from_semantic = True
                 print(f"[RETRIEVER MATCH] Matched: {matched.metadata.get('name')} (Score: {best_score})")
 
-            # Step 2: Fuzzy fallback if retriever fails
+            # Step 2: Fuzzy fallback
             if not matched:
                 print("[INFO] No strong vector match. Trying fuzzy fallback.")
                 all_meta = vectorstore._collection.get(include=["metadatas"])["metadatas"]
@@ -208,7 +243,8 @@ Description:
         response = ""
         for attempt in range(3):
             try:
-                response = rag_chain_product.invoke({
+                chain = rag_chain_followup if is_followup else rag_chain_product
+                response = chain.invoke({
                     "question": query,
                     "context": context,
                     "history": formatted_history
@@ -223,7 +259,7 @@ Description:
         if not response:
             return "Sorry, I couldn’t process your product question right now. Please try again later."
 
-        # Clean up price fallback phrases if real price is available
+        # Clean price fallback if real price is available
         if price != "Contact us for pricing":
             patterns = [
                 r"(?i)as for pricing.*?\.",
@@ -248,31 +284,33 @@ Description:
         about_keywords = ["journey", "growth", "promise", "mission", "vision", "offer", "beginnings"]
         query_lower = query.lower()
 
-        
-        if any(k in query.lower() for k in about_keywords):
+        if any(k in query_lower for k in about_keywords):
             print("[INFO] Keyword matches about page intent.")
-
             raw = vectorstore._collection.get(include=["documents", "metadatas"])
             about_docs = [
                 doc for doc, meta in zip(raw["documents"], raw["metadatas"])
                 if meta.get("source") == "about" or "about" in meta.get("url", "")
             ]
             context = "\n".join(about_docs)[:5000]
-
-            
             response = rag_chain_general.invoke({
                 "question": query,
                 "context": context,
                 "history": formatted_history
             }).strip()
-
             response += "\n\nLearn more: https://www.silvestreph.com/about"
             return response
 
         docs = retriever.get_relevant_documents(query)
         context_docs = [d for d in docs if d.metadata.get("type") != "product"]
-        if not context_docs:
-             return "Sorry, I couldn’t find information related to your question."
+
+        relevance_scores = [
+            fuzz.token_set_ratio(query.lower(), d.page_content.lower()) for d in context_docs
+        ]
+        max_score = max(relevance_scores) if relevance_scores else 0
+
+        if not context_docs or max_score < 50:
+            print(f"[FILTER] Ignored query '{query}' due to low relevance (score: {max_score})")
+            return "Sorry, I couldn’t find information related to your question."
 
         context = "\n".join(d.page_content for d in context_docs)[:5000]
         response = rag_chain_general.invoke({
@@ -288,8 +326,6 @@ Description:
     except Exception as e:
         print("[ERROR] General query failed:", e)
         return "Sorry, I couldn’t process your request right now."
-
-
 
 
 # PRODUCT LISTING
