@@ -56,16 +56,16 @@ def scrape_product_page(url: str) -> dict:
         price_tag = soup.find("span", {"data-hook": "formatted-primary-price"})
         price = price_tag.get_text(strip=True) if price_tag else "Contact us for pricing"
 
-        # Availability
-        availability = "Available in Pails and Drums"
+        # # Availability
+        # availability = "Available in Pails and Drums"
 
         # Combine into full content block
-        full_text = f"{title}\n\n{description}\n\nPrice: {price}\nAvailability: {availability}\nURL: {url}"
+        full_text = f"{title}\n\n{description}\n\nPrice: {price}\nURL: {url}"
 
         return {
             "url": url,
             "name": title,
-            "description": description + f"\n\nAvailability: {availability}",
+            "description": description,
             "price": price,
             "content": full_text,
             "hash": compute_hash(full_text),

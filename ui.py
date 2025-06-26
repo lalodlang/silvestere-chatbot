@@ -61,7 +61,7 @@ class ChatApp(ctk.CTk):
             self.add_bubble("🔄 Refreshing knowledge base. Please wait...", sender="bot")
 
             try:
-                refresh_database()
+                # refresh_database()
                 rebuild_vectorstore()
                 self.add_bubble("✅ Knowledge base refreshed successfully!", sender="bot")
             except Exception as e:

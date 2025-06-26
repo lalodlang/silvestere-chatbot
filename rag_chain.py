@@ -13,7 +13,7 @@ from difflib import SequenceMatcher
 from live_scraper import crawl_product_pages, scrape_product_page
 import chromadb
 from db import GENERAL_PAGES 
-from db import load_products_from_db
+from db import get_all_documents, chunk_documents
 from intent_utils import is_followup_question
 
 load_dotenv()
@@ -33,9 +33,15 @@ def get_embeddings_model():
 
 embedding = get_embeddings_model()
 vectorstore = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding)
+retriever = vectorstore.as_retriever(search_kwargs={"k":5})  # k = number of context chunks
+
 
 # LLM
-llm = ChatGroq(groq_api_key=GROQ_API_KEY, model=GROQ_MODEL)
+llm = ChatGroq(
+    groq_api_key=GROQ_API_KEY,
+    model=GROQ_MODEL,
+    temperature=0 # I set this to 0 to avoid hallucinations
+)
 
 # Prompts
 PRODUCT_PROMPT = PromptTemplate.from_template("""
@@ -60,7 +66,9 @@ Respond concisely, with product name, price, availability, and raw URL.
 GENERAL_PROMPT = PromptTemplate.from_template("""
 You are a professional assistant for Silvestre Oil Company.
 
-Only use this official context to answer. If not found in context, say:
+Only use this official context to answer. Reply in a corporate tone. Provide link to information provided if available.
+                                              
+If not found in context, say:
 "I'm sorry, I can only provide information from our website."
 
 <context>
@@ -72,8 +80,6 @@ Only use this official context to answer. If not found in context, say:
 </chat_history>
 
 User: {question}
-
-Reply in a corporate tone.
 """)
 
 # Chains
@@ -90,10 +96,16 @@ rag_chain_product = (
 
 rag_chain_general = (
     RunnableParallel(
+        # Let the retriever fetch context based on the question
         context=RunnableLambda(lambda x: x["context"]),
         question=RunnablePassthrough(),
         history=RunnableLambda(lambda x: x.get("history", ""))
     )
+    | RunnableLambda(lambda x: {
+        "question": x["question"],
+        "history": x["history"],
+        "context": "\n".join([doc.page_content for doc in x["context"]])
+    })
     | GENERAL_PROMPT
     | llm
     | StrOutputParser()
@@ -150,53 +162,85 @@ def ask_bot(query: str, history: list[dict]):
     global last_product_doc
     from db import GENERAL_PAGES
 
-    intent = detect_intent(query)
-    formatted_history = "\n".join(f"{msg['role'].capitalize()}: {msg['content']}" for msg in history)
+    # intent = detect_intent(query)
+    # Only take the last N history items (e.g., last 4 exchanges = 8 messages)
+    N = 6
+    recent_history = history[-N:] if len(history) > N else history
 
-    if intent == "product":
-        if is_followup_question(query) and last_product_doc:
-            context = last_product_doc["content"]
-        else:
-            products = get_fresh_products()
-            matched = match_query_to_product(query, products)
-            if not matched:
-                return "I'm sorry, I couldn't find any matching product from our website."
-            last_product_doc = matched
-            context = matched["content"]
+    formatted_history = "\n".join(
+        f"{msg['role'].capitalize()}: {msg['content']}" for msg in recent_history
+    )
 
-        return rag_chain_product.invoke({
-            "question": query,
-            "context": context,
-            "history": formatted_history
-        })
+    # if intent == "product":
+    #     if is_followup_question(query) and last_product_doc:
+    #         context = last_product_doc["content"]
+    #     else:
+    #         products = get_fresh_products()
+    #         matched = match_query_to_product(query, products)
+    #         if not matched:
+    #             return "I'm sorry, I couldn't find any matching product from our website."
+    #         last_product_doc = matched
+    #         context = matched["content"]
 
-    else:
-        context = "\n".join(
-            doc.page_content for doc in load_products_from_db()
-            if doc.metadata.get("type") != "product"
-        )
+    #     return rag_chain_product.invoke({
+    #         "question": query,
+    #         "context": context,
+    #         "history": formatted_history
+    #     })
 
-        response = rag_chain_general.invoke({
-            "question": query,
-            "context": context,
-            "history": formatted_history
-        })
+    # else:
+    context = retriever.get_relevant_documents(query)
 
-        response = re.sub(r"Best Regards,.*", "", response, flags=re.IGNORECASE).strip()
+    response = rag_chain_general.invoke({
+        "question": query,
+        "context": context,
+        "history": formatted_history
+    })
 
-        query_lower = query.lower()
-        matched_page = next((key for key in GENERAL_PAGES if key in query_lower), None)
-        if matched_page:
-            response += f"\n\nYou may also visit: {GENERAL_PAGES[matched_page]}"
+    for i, doc in enumerate(context, 1):
+        print(f"\n🔍 Document {i}:")
+        print(f"Content: {doc.page_content}")
+        print(f"Metadata: {doc.metadata}")
 
-        return response
+    response = re.sub(r"Best Regards,.*", "", response, flags=re.IGNORECASE).strip()
+
+    query_lower = query.lower()
+    matched_page = next((key for key in GENERAL_PAGES if key in query_lower), None)
+    if matched_page:
+        response += f"\n\nYou may also visit: {GENERAL_PAGES[matched_page]}"
+
+    return response
 
 def rebuild_vectorstore():
-    print("[INFO] Rebuilding vectorstore from scraped documents...")
-    documents = load_products_from_db()
+    global vectorstore, embedding, retriever
+
+    print("[INFO] Rebuilding vectorstore...")
+
+    documents = get_all_documents()
+    print(f"[INFO] Loaded {len(documents)} documents before chunking.")
+
+    chunks = chunk_documents(documents)
+    print(f"[INFO] Created {len(chunks)} chunks after splitting.")
+
+    try:
+        if vectorstore:
+            vectorstore.delete_collection()
+            print("[INFO] Vectorstore collection cleared.")
+    except Exception as e:
+        print(f"[WARN] Failed to clear vectorstore: {e}")
+
     embedding = CohereEmbeddings(model="embed-multilingual-v3.0", cohere_api_key=COHERE_API_KEY)
-    vectorstore = Chroma.from_documents(documents, embedding, persist_directory="chroma_db")
-    vectorstore.persist()
-    print("✅ Vectorstore rebuilt.")
+
+    # Rebuild and save new vectorstore
+    Chroma.from_documents(chunks, embedding, persist_directory=CHROMA_PATH).persist()
+
+    print("[INFO] Vectorstore rebuilt and saved.")
+
+    # Now reconnect cleanly to new vectorstore
+    vectorstore = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding)
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 7})
+
+    print("[INFO] Reconnected to new vectorstore.")
+
 
 
