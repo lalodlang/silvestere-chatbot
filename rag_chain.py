@@ -147,7 +147,7 @@ def ask_bot(query: str, history: list[dict]) -> str:
     matched_from_semantic = False
 
     intent = detect_intent(query)
-    if is_followup_question(query):
+    if is_followup_question(query) and last_product_doc:
         intent = "product"
         
     formatted_history = "\n".join(f"{msg['role'].capitalize()}: {msg['content']}" for msg in history[-3:])
@@ -282,6 +282,7 @@ Description:
     # --------------------- GENERAL INTENT ---------------------
     try:
         about_keywords = ["journey", "growth", "promise", "mission", "vision", "offer", "beginnings"]
+        contact_keywords = ["contact", "phone", "email", "reach you", "get in touch", "how do i contact", "customer service", "call you", "message", "speak with someone", "talk to support", "contact your company"]
         query_lower = query.lower()
 
         if any(k in query_lower for k in about_keywords):
@@ -300,6 +301,24 @@ Description:
             response += "\n\nLearn more: https://www.silvestreph.com/about"
             return response
 
+        # Contact page match
+        if any(k in query_lower for k in contact_keywords):
+            print("[INFO] Keyword matches contact page intent.")
+            raw = vectorstore._collection.get(include=["documents", "metadatas"])
+            contact_docs = [
+                doc for doc, meta in zip(raw["documents"], raw["metadatas"])
+                if meta.get("source") == "contact" or "contact" in meta.get("url", "")
+            ]
+            context = "\n".join(contact_docs)[:5000]
+            response = rag_chain_general.invoke({
+                "question": query,
+                "context": context,
+                "history": formatted_history
+            }).strip()
+            response += "\n\nVisit: https://www.silvestreph.com/contact"
+            return response
+
+
         docs = retriever.get_relevant_documents(query)
         context_docs = [d for d in docs if d.metadata.get("type") != "product"]
 
@@ -308,7 +327,7 @@ Description:
         ]
         max_score = max(relevance_scores) if relevance_scores else 0
 
-        if not context_docs or max_score < 50:
+        if not context_docs or max_score < 30:
             print(f"[FILTER] Ignored query '{query}' due to low relevance (score: {max_score})")
             return "Sorry, I couldn’t find information related to your question."
 
