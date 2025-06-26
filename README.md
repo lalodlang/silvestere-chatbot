@@ -5,7 +5,7 @@ A desktop-based intelligent assistant for Silvestre PH products, built with Pyth
 #Features
 
 - Real-time product Q&A from (SilvestrePH) "https://www.silvestreph.com/"
-- Knowledge base scraping from sitemap + live pages
+- Knowledge base scraping from live pages
 - Memory and follow-up understanding
 - Clickable URLs in chat
 - Manual knowledge base refresh with spinner overlay
