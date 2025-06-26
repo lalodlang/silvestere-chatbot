@@ -1,23 +1,23 @@
 import os
 import uuid
 from dotenv import load_dotenv
-from langchain_chroma import Chroma
+from langchain_community.vectorstores import Chroma
 from langchain_cohere import CohereEmbeddings
-from db import load_products_from_db, refresh_database  
+from db import load_all_documents  
 
 # Load env vars
 load_dotenv()
 COHERE_TOKEN = os.getenv("COHERE_API_KEY")
 
 if not COHERE_TOKEN:
-    raise ValueError("Missing Cohere API Key")
+    raise ValueError("❌ Missing Cohere API Key. Check your .env file.")
 
-# STEP 1: Refresh scraped data
-print("🌐 Scraping Silvestre website and refreshing database...")
-refresh_database()
-print("✅ Database updated (silvestre_products.db)")
 
-# STEP 2: Rebuild vectorstore
+print("🌐 Scraping Silvestre website for product and general info...")
+docs = load_all_documents()
+print("✅ Scraping complete")
+
+
 print("⏳ Rebuilding vectorstore with Cohere embeddings...")
 
 embeddings = CohereEmbeddings(
@@ -26,7 +26,9 @@ embeddings = CohereEmbeddings(
 )
 print("[INFO] Using Cohere for embedding")
 
-docs = load_products_from_db()
+num_products = sum(1 for d in docs if d.metadata.get("type") == "product")
+num_general = len(docs) - num_products
+print(f"[INFO] Loaded {num_products} product documents and {num_general} general documents for embedding.")
 
 vectorstore = Chroma.from_documents(
     documents=docs,
@@ -35,4 +37,5 @@ vectorstore = Chroma.from_documents(
     persist_directory="chroma_db"
 )
 
+vectorstore.persist()
 print("✅ Vectorstore rebuilt successfully and saved to chroma_db/")
