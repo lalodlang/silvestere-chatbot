@@ -1,65 +1,85 @@
-# live_scraper.py
-
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 import hashlib
 
 BASE_URL = "https://www.silvestreph.com"
 START_URL = f"{BASE_URL}/shop"
 
-def crawl_product_pages(start_url=START_URL, max_depth=2):
-    visited = set()
-    to_visit = [(start_url, 0)]
-    product_urls = set()
+def crawl_product_pages():
+    CATEGORY_URLS = {
+        "Industrial Lubricants": "Industrial%2520Lubricants",
+        "Automotive Lubricants": "Automotive%2520Lubricants",
+        "Marine Lubricants": "Marine%2520Lubricants",
+        "Grease Lubricants": "Grease%2520Lubricants",
+        "Specialty Lubricants": "Specialty%2520Lubricants",
+        "Motorcycle Lubricants": "Motorcycle%2520Lubricants",
+        "Motorcycle Tires": "Motorcycle%2520Tires"
+    }
 
-    while to_visit:
-        current_url, depth = to_visit.pop(0)
-        if current_url in visited or depth > max_depth:
-            continue
+    headers = {"User-Agent": "Mozilla/5.0"}
+    all_products = set()
 
-        visited.add(current_url)
-        try:
-            res = requests.get(current_url, timeout=10)
-            soup = BeautifulSoup(res.text, "html.parser")
-        except Exception:
-            continue
+    for category, encoded in CATEGORY_URLS.items():
+        print(f"\n📂 Scraping category: {category}")
+        for page in range(1, 10):
+            url = f"{BASE_URL}/shop?Category={encoded}&page={page}"
+            try:
+                response = requests.get(url, headers=headers, timeout=10)
+                soup = BeautifulSoup(response.text, "html.parser")
 
-        # Only keep exact matches for /product-page/
-        if "/product-page/" in current_url:
-            product_urls.add(current_url)
+                links = {
+                    urljoin(BASE_URL, a["href"])
+                    for a in soup.find_all("a", href=True)
+                    if "/product-page/" in a["href"]
+                }
 
-        for link in soup.find_all("a", href=True):
-            href = link["href"]
-            full_url = urljoin(current_url, href)
-            if urlparse(full_url).netloc == urlparse(BASE_URL).netloc and full_url not in visited:
-                to_visit.append((full_url, depth + 1))
+                if not links:
+                    print(f"[!] No more products on page {page}, stopping.")
+                    break
 
-    return list(product_urls)
+                for link in links:
+                    all_products.add((link, category))
+
+                print(f"[+] Page {page}: {len(links)} links")
+
+            except Exception as e:
+                print(f"[!] Failed to load {url}: {e}")
+
+    print(f"\n✅ Total unique product URLs: {len(all_products)}")
+    return list(all_products)
 
 def compute_hash(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()
 
-def scrape_product_page(url: str) -> dict:
+def scrape_product_page(url: str, category: str = "Uncategorized") -> dict:
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         soup = BeautifulSoup(res.text, "html.parser")
 
         # Title
-        title = soup.find("h1").get_text(strip=True) if soup.find("h1") else "Untitled Product"
+        title_tag = soup.find("h1")
+        title = title_tag.get_text(strip=True) if title_tag else "Untitled Product"
 
-        # Description
-        desc = soup.find("div", class_="elementor-widget-theme-post-content")
-        description = desc.get_text(separator="\n", strip=True) if desc else "No description available."
+        # 💬 Extract from <pre data-hook="description"> directly
+        description = ""
+        pre_tag = soup.find("pre", attrs={"data-hook": "description"})
+        if pre_tag:
+            paragraphs = pre_tag.find_all("p")
+            clean_paragraphs = [
+                p.get_text(strip=True) for p in paragraphs
+                if p.get_text(strip=True) and p.get_text(strip=True) != "\xa0"
+            ]
+            description = "\n\n".join(clean_paragraphs).strip()
 
-        # Price (real value from product page)
+        if not description:
+            description = "No description available."
+
         price_tag = soup.find("span", {"data-hook": "formatted-primary-price"})
         price = price_tag.get_text(strip=True) if price_tag else "Contact us for pricing"
 
-        # Availability
         availability = "Available in Pails and Drums"
 
-        # Combine into full content block
         full_text = f"{title}\n\n{description}\n\nPrice: {price}\nAvailability: {availability}\nURL: {url}"
 
         return {
@@ -69,9 +89,12 @@ def scrape_product_page(url: str) -> dict:
             "price": price,
             "content": full_text,
             "hash": compute_hash(full_text),
+            "category": category
         }
 
     except Exception as e:
-        print(f"[ERROR] Failed to scrape {url}: {e}")
+        print(f"[ERROR] Failed to scrape ({url}, {category}): {e}")
         return None
 
+if __name__ == "__main__":
+    crawl_product_pages()
