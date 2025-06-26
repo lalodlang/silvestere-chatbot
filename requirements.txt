@@ -12,3 +12,4 @@ tiktoken
 huggingface_hub
 python-dotenv
 rapidfuzz
+fuzzywuzzy
