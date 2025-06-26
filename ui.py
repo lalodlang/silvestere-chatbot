@@ -3,6 +3,7 @@ import customtkinter as ctk
 import webbrowser
 import re
 import sys, os
+import time
 import traceback
 import threading
 from datetime import datetime
@@ -52,25 +53,35 @@ class ChatApp(ctk.CTk):
         self.refresh_btn.pack(side="left", padx=(0, 10))
 
     def refresh_data(self):
-        from db import refresh_database
-        from rag_chain import rebuild_vectorstore
-
+        from vectorstore_utils import build_vectorstore_if_new
+        
         def run_refresh():
             self.refresh_btn.configure(state="disabled")
             self.show_spinner()
-            self.add_bubble("🔄 Refreshing knowledge base. Please wait...", sender="bot")
+            self.add_bubble("🔄 Checking for new product or info updates...", sender="bot")
 
             try:
-                refresh_database()
-                rebuild_vectorstore()
-                self.add_bubble("✅ Knowledge base refreshed successfully!", sender="bot")
+                self.update_progress(0.1); time.sleep(0.3)
+                self.update_progress(0.3); time.sleep(0.3)
+                self.update_progress(0.5); time.sleep(0.3)
+
+                build_vectorstore_if_new()
+                self.update_progress(0.8); time.sleep(0.3)
+                self.update_progress(0.9); time.sleep(0.3)
+                self.update_progress(1.0)
+                self.add_bubble("✅ Knowledge base is up to date!", sender="bot")
+
             except Exception as e:
                 self.add_bubble(f"❌ Refresh failed: {e}", sender="bot")
+
             finally:
                 self.hide_spinner()
                 self.refresh_btn.configure(state="normal")
 
+
         threading.Thread(target=run_refresh, daemon=True).start()
+
+
 
 
     def send_message(self, event=None):
@@ -129,7 +140,11 @@ class ChatApp(ctk.CTk):
         bubble.pack(anchor=anchor, padx=4, pady=2)
         bubble.configure(width=420)
 
+        if not msg:
+            msg = "[No response received.]"
+
         parts = re.split(r'(https?://\S+)', msg)
+
         for part in parts:
             if re.match(r'https?://', part):
                 cleaned_url = part.rstrip('.,)]')
@@ -194,31 +209,40 @@ class ChatApp(ctk.CTk):
 
 
     def show_spinner(self):
-    # Overlay with blur effect
-        self.overlay = ctk.CTkFrame(self, fg_color="#ffffff")  # Semi-transparent white
+        self.overlay = ctk.CTkFrame(self, fg_color="#ffffff")
         self.overlay.place(relx=0.5, rely=0.5, anchor="center", relwidth=1, relheight=1)
 
-    # Spinner frames
         self.spinner_image = Image.open(resource_path("assets/spinner.gif"))
         self.spinner_frames = [
             ImageTk.PhotoImage(frame.copy().resize((48, 48)).convert("RGBA"))
             for frame in ImageSequence.Iterator(self.spinner_image)
         ]
 
-    # Spinner
         self.spinner_label = ctk.CTkLabel(self.overlay, text="", image=self.spinner_frames[0], fg_color="transparent")
         self.spinner_label.pack(pady=(200, 5))
 
-    # Loading text
         self.loading_text = ctk.CTkLabel(self.overlay, text="Loading...", text_color="#333333", font=ctk.CTkFont(size=14))
         self.loading_text.pack()
+
+        # Progress bar (new)
+        self.progress_var = ctk.DoubleVar(value=0)
+        self.progress_bar = ctk.CTkProgressBar(self.overlay, variable=self.progress_var, width=200)
+        self.progress_bar.pack(pady=(10, 0))
+        self.progress_bar.set(0)
+
+        self.progress_percent_label = ctk.CTkLabel(self.overlay, text="0%", text_color="#555555", font=ctk.CTkFont(size=12))
+        self.progress_percent_label.pack(pady=(2, 0))
 
         self.spinner_running = True
         self.spinner_index = 0
         self.animate_spinner_frame()
 
-
-
+    def update_progress(self, value: float):
+        """Set progress bar and label (0.0 to 1.0)."""
+        self.progress_var.set(value)
+        percent = int(value * 100)
+        self.progress_percent_label.configure(text=f"{percent}%")
+        self.update_idletasks()
 
     def animate_spinner_frame(self):
         if self.spinner_running:
@@ -231,23 +255,21 @@ class ChatApp(ctk.CTk):
         self.spinner_running = False
         if hasattr(self, 'spinner_label'):
             self.spinner_label.destroy()
-
         if hasattr(self, 'loading_text'):
             self.loading_text.destroy()
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.destroy()
+        if hasattr(self, 'progress_percent_label'):
+            self.progress_percent_label.destroy()
 
-    # Show ✅ checkmark
         check_img = Image.open(resource_path("assets/check.png")).resize((48, 48))
         self.check_image = ImageTk.PhotoImage(check_img)
 
         self.check_label = ctk.CTkLabel(self.overlay, text="", image=self.check_image, fg_color="transparent")
         self.check_label.pack(pady=(200, 5))
 
-    # Completion text
         self.done_label = ctk.CTkLabel(self.overlay, text="Refresh Complete!", text_color="#28a745", font=ctk.CTkFont(size=14, weight="bold"))
         self.done_label.pack()
 
-    # Remove overlay after delay
         self.after(1500, lambda: self.overlay.destroy())
-
-
 
